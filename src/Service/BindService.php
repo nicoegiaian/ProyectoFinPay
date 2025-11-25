@@ -44,6 +44,10 @@ class BindService implements BindServiceInterface
         $this->scope = $BIND_SCOPE;
     }
 
+
+     // El 25/11 se notifica que por posibles demoras para conseguir el ID para operar con DEBIN con frecuencia diaria y de manera automatica, se debe saltear el proceso de pedido de DEBIN, 
+    // por lo que las siguientes 2 funciones "executegetDebinStatusByIdDebinPull", "initiateDebinPull", se comenta por desuso, pero se mantiene en caso de reactivar el circuito.
+   
     /**
      * Consulta el estado de un DEBIN previamente iniciado usando su ID de BIND.
      * Endpoint: GET /.../GetDebinPedidoById/{id}
@@ -51,6 +55,7 @@ class BindService implements BindServiceInterface
      * @return array La respuesta detallada de BIND con el campo 'estado'.
      * @throws \RuntimeException Si la API responde con un error HTTP.
      */
+    
     public function getDebinStatusById(string $debinId): array
     {
         $token = $this->getAccessToken(); // Reutiliza el token de autenticación
@@ -86,12 +91,15 @@ class BindService implements BindServiceInterface
              throw new \RuntimeException("Fallo de comunicación al consultar estado DEBIN: " . $e->getMessage(), $e->getCode(), $e);
         }
     }
+   
+        
     /**
      * Inicia el DEBIN PULL (Débito Inmediato) usando la Suscripción de Recurrencia activa.
      * * @param float $monto Monto total a traer desde Banco Galicia.
      * @param string $referencia Referencia única para este DEBIN.
      * @return array La respuesta de la API de BIND.
      */
+    
     public function initiateDebinPull(float $monto, string $referencia): array
     {
         $token = $this->getAccessToken();
@@ -121,6 +129,9 @@ class BindService implements BindServiceInterface
 
         return $data;
     }
+    
+
+
     /**
      * Obtiene el token de acceso necesario para la API de BIND.
      * @return string El token de acceso.

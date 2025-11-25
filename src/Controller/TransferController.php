@@ -30,32 +30,20 @@ class TransferController extends AbstractController
         }
 
         try {
-            // 2. Aquí llamamos al TransferManager Service (Lógica del PULL)
-            // Se inicia el DEBIN PULL y se registra en la tabla 'debin_seguimiento'.
-            $result = $transferManager->executeDebinPull($fechaLiquidacionDDMMAA);
+            // 2. Aquí llamamos al TransferManager Service 
+            $transferManager->executeTransferProcess($fechaLiquidacionDDMMAA);
             
             // 3. Devolvemos la respuesta
-            if ($result['status'] === 'debin_initiated') {
-                return $this->json([
-                    'status' => 'success', 
-                    'message' => 'DEBIN PULL iniciado exitosamente. Monitoreo asíncrono en curso.',
-                    'debin_id' => $result['id_debin']
-                ]);
-            }
-            
-            // Caso donde no hay montos a liquidar (desde el Manager)
-            if ($result['status'] === 'info') {
-                 return $this->json(['status' => 'info', 'message' => $result['message']]);
-            }
-
-            // Para cualquier otro resultado (aunque idealmente no debería ocurrir)
-            return $this->json($result, 500);
+            return $this->json([
+                'status' => 'success', 
+                'message' => 'Proceso de liquidación y transferencias iniciado desde el Front.'
+            ]);
 
         } catch (\Exception $e) {
             // Manejo de excepciones (ej. fallo de conexión a BIND en la llamada inicial)
             return $this->json([
                 'status' => 'error', 
-                'message' => 'Fallo al iniciar el DEBIN PULL con BIND o BD.',
+                'message' => 'Fallo al iniciar el proceso de transferencias desde el Front',
                 'details' => $e->getMessage()
             ], 500);
         }

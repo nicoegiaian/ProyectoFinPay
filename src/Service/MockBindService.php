@@ -14,46 +14,35 @@ class MockBindService implements BindServiceInterface  // Es buena práctica cre
         $this->scenario = $scenario;
     }
 
-    // SCENARIO 1: Simulación de PULL exitoso
-    public function initiateDebinPull(float $monto, string $referencia): array
-    {
-        // El escenario define el resultado del PULL
-        if ($this->scenario === 'PULL_RECHAZADO') {
-            return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '3'];
-        }
-        if ($this->scenario === 'PULL_PROCESAR') {
-            return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '1'];
-        }
-        if ($this->scenario === 'PULL_CONSULTAR') {
-            return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '4'];
-        }
-        if ($this->scenario === 'PULL_AUDITAR') {
-            return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '5'];
-        }
-        // Comportamiento por defecto
-        return ['idComprobante' => 'MOCK-' . $referencia, 'estadoId' => '2'];
-    }
-
-    // ... (El resto de métodos usa $this->scenario para decidir el resultado)
-
-
-    // SCENARIO 2: Simulación de Monitoreo Fallido
-    public function getDebinStatusById(string $debinId): array
-    {
-        // Simular que el DEBIN fue RECHAZADO por el banco.
-        return ['id' => $debinId, 'descripcion' => 'MOCK FAIL', 'estado' => 'UNKNOWN_FOREVER'];
-    }
     
     // SCENARIO 3: Simulación de Transferencia PUSH Exitosa
     public function transferToThirdParty(string $cbuDestino, float $monto): array
     {
-        // Devolvemos la respuesta de éxito de BIND para la transferencia PUSH
+        // 1. Escenario: ERROR TOTAL (Simula caída de API o rechazo masivo)
+        if ($this->scenario === 'PUSH_ERROR') {
+            throw new \RuntimeException("MOCK: Error forzado de conexión con BIND.");
+        }
+
+        // 2. Escenario: FALLO PARCIAL (Simula que algunos CBU fallan)
+        // Lógica: Si el escenario es PUSH_PARTIAL, fallamos aleatoriamente o para montos específicos.
+        // Para tener control, digamos que falla si el monto termina en .50 (o usa rand(0,1))
+        if ($this->scenario === 'PUSH_PARTIAL') {
+            // Ejemplo: Fallar aleatoriamente el 50% de las veces
+            if (rand(0, 1) === 1) {
+                throw new \RuntimeException("MOCK: Fallo parcial simulado para CBU $cbuDestino");
+            }
+        }
+
+        // 3. Escenario: ÉXITO (PUSH_OK)
         return [
-            'comprobanteId' => 'PUSH-MOCK-OK-' . time(),
+            'comprobanteId' => 'MOCK-PUSH-' . uniqid(), // Generamos ID único
             'estado' => 'COMPLETADA',
-            'coelsaId' => 'COELSA-MOCK-123'
+            'coelsaId' => 'MOCK-COELSA-' . rand(1000, 9999),
+            'mensaje' => 'Transferencia Aprobada (Simulación)'
         ];
     }
     
-    // ... otros métodos
+    // Métodos viejos (vacíos o con retorno dummy para cumplir interfaz)
+    public function initiateDebinPull(float $monto, string $referencia): array { return []; }
+    public function getDebinStatusById(string $debinId): array { return []; }
 }

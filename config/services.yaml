@@ -1,9 +1,3 @@
-# This file is the entry point to configure your own services.
-# Files in the packages/ subdirectory configure your dependencies.
-
-# Put parameters here that don't need to change on each machine where the app is deployed
-# https://symfony.com/doc/current/best_practices.html#use-parameters-for-application-configuration
-# config/services.yaml (Línea clave que permite la carga)
 imports:
     - { resource: 'services_*.yaml' } 
     - { resource: '{%env(resolve:APP_ENV)%}/*.yaml', ignore_errors: true }
@@ -11,22 +5,16 @@ imports:
 parameters:
 
 services:
-    # default configuration for services in *this* file
     _defaults:
-        autowire: true      # Automatically injects dependencies in your services.
-        autoconfigure: true # Automatically registers your services as commands, event subscribers, etc.
+        autowire: true      
+        autoconfigure: true 
 
-    # makes classes in src/ available to be used as services
-    # this creates a service per class whose id is the fully-qualified class name
-    # Configuración del Subscriber para inyectar el secreto
-              
+
     App\:
         resource: '../src/'
 
-    # Configuración Específica para tu Comando
     App\EventSubscriber\JwtTokenSubscriber:
         arguments:
-            # 1. Obtenemos el valor de la variable de entorno JWT_SECRET
             $jwtSecret: '%env(JWT_SECRET)%'
             
     App\Command\OrquestadorTrxCommand:
@@ -46,12 +34,10 @@ services:
             $MAIL_HOST: '%env(MAIL_HOST)%'
             $MAIL_USERNAME: '%env(MAIL_USERNAME)%'
             $MAIL_PASSWORD: '%env(MAIL_PASSWORD)%'
-            $MAIL_PORT: '%env(int:MAIL_PORT)%'          # Usamos 'int:' para forzar tipo entero
+            $MAIL_PORT: '%env(int:MAIL_PORT)%'         
             $MAIL_ENCRYPTION: '%env(MAIL_ENCRYPTION)%'
             $MAIL_DESTINATION: '%env(MAIL_DESTINATION)%'
-    # add more service definitions when explicit configuration is needed
-    # please note that last definitions always *replace* previous ones
-    # Configuración de BindService
+ 
     App\Service\BindService:
         arguments:
             # Autowiring se encarga de HttpClientInterface. 
@@ -64,3 +50,8 @@ services:
             $BIND_CBU_ORIGEN: '%env(BIND_CBU_ORIGEN)%'
             $BIND_TOKEN_URL: '%env(BIND_TOKEN_URL)%'
             $BIND_SCOPE: '%env(BIND_SCOPE)%' 
+
+    App\Service\TransferManager:
+        arguments:
+            $finpaySettlementLogger: '@monolog.logger.finpay_settlement'
+            $logFilePath: '%kernel.logs_dir%/transferencias_diarias.log'

@@ -1,0 +1,15 @@
+monolog:
+    channels: ['finpay_settlement'] # 1. Definimos el canal personalizado
+
+    handlers:
+        # ... otros handlers existentes (main, console, etc.) ...
+
+        # 2. Configuración del Handler Específico
+        finpay_settlement:
+            type: stream
+            # Ruta donde se guardará el archivo
+            path: "%kernel.logs_dir%/transferencias_diarias.log"
+            level: info
+            channels: ["finpay_settlement"]
+            # Formato simple para fácil lectura
+            formatter: monolog.formatter.line
