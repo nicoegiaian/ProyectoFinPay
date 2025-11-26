@@ -26,10 +26,11 @@ class MockBindService implements BindServiceInterface  // Es buena práctica cre
         // 2. Escenario: FALLO PARCIAL (Simula que algunos CBU fallan)
         // Lógica: Si el escenario es PUSH_PARTIAL, fallamos aleatoriamente o para montos específicos.
         // Para tener control, digamos que falla si el monto termina en .50 (o usa rand(0,1))
-        if ($this->scenario === 'PUSH_PARTIAL') {
+        if ($this->scenario === 'PUSH_PARCIAL') {
             // Ejemplo: Fallar aleatoriamente el 50% de las veces
-            if (rand(0, 1) === 1) {
-                throw new \RuntimeException("MOCK: Fallo parcial simulado para CBU $cbuDestino");
+            $ultimoDigito = substr($cbuDestino, -1);
+            if ((int)$ultimoDigito % 2 === 0) {
+                 throw new \RuntimeException("MOCK: Fallo por CBU Par ($cbuDestino)");
             }
         }
 

@@ -43,8 +43,9 @@ class Notifier
      * @param string $subject Asunto del correo (ej: ALERTA: FALLO EN PROCESO X)
      * @param string $body Mensaje detallado del error.
      * @return bool True si se envió con éxito, False en caso contrario.
+     * @param string|null $attachmentPath (Opcional) Ruta absoluta del archivo a adjuntar
      */
-    public function sendFailureEmail(string $subject, string $body): bool
+    public function sendFailureEmail(string $subject, string $body,?string $attachmentPath = null): bool
     {
         $mail = new PHPMailer(true);
 
@@ -71,7 +72,11 @@ class Notifier
                     $mail->addAddress($address);
                 }
             }
-            
+            //Si hay adjuntos para enviar, segun se haya recibido del parametro opcional de entrada.
+            if ($attachmentPath !== null && file_exists($attachmentPath)) {
+                $mail->addAttachment($attachmentPath);
+            }
+
             // Contenido
             $mail->isHTML(false); // Enviamos texto plano
             $mail->Subject = $subject;

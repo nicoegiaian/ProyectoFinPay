@@ -15,7 +15,7 @@ class TransferManager
     private Notifier $notifier;
     private Connection $dbConnection; 
     private LoggerInterface $logger;
-    private string $logFilePath; // <--- Nueva Propiedad
+    private string $logFilePath; 
 
     public function __construct(BindServiceInterface $bindService, Notifier $notifier, Connection $defaultConnection, LoggerInterface $finpaySettlementLogger,string $logFilePath)
     {
@@ -76,14 +76,31 @@ class TransferManager
             $this->dbConnection->update('lotes_liquidacion', [
                 'monto_solicitado' => $data['total_monto'],
                 'monto_pdv' => $data['monto_pdv'],
-                'monto_fabricante' => $data['monto_fabricante']
+                'monto_fabricante' => $data['monto_fabricante'],
+                'transacciones_ids' => json_encode($data['transacciones_ids'])
             ], ['id' => $loteId]);
             
             $this->logger->info("Montos Calculados -> PDV: {$data['monto_pdv']} | Fabricante: {$data['monto_fabricante']}");
 
             // Pagos a Puntos de Venta
-            $pdvs = $this->getPendingTransfersForPush($fechaSQL); // <--- Método a implementar/reactivar
+            $pdvs = $this->getPendingTransfersForPush($fechaSQL);
             $errores = 0;
+            $totalPdvs = count($pdvs);
+
+            // --- CORRECCIÓN 1: DETECCIÓN DE DATOS INCOMPLETOS ---
+            // Si hay plata para pagar a PDVs ($monto_pdv > 0) pero la lista de PDVs está vacía...
+            // significa que faltan CBUs.
+            if ($data['monto_pdv'] > 0 && $totalPdvs === 0) {
+                $msg = "ALERTA CRÍTICA: Hay monto PDV pendiente ($" . $data['monto_pdv'] . ") pero NO se encontraron cuentas destino con CBU válido.";
+                $this->logger->error($msg);
+                
+                // Marcamos como error, enviamos mail y detenemos, porque no se pagará nada.
+                $this->closeLote($loteId, 'ERROR');
+                $this->notifier->sendFailureEmail("Error Datos Faltantes $fechaLiquidacionDDMMAA", $msg);
+                return;
+            }
+            $this->logger->info("Iniciando transferencias a $totalPdvs Puntos de Venta...");
+
 
             foreach ($pdvs as $pdv) {
                 try {
@@ -94,14 +111,18 @@ class TransferManager
                     
                     // Actualizar Transacciones
                     $bindId = $res['comprobanteId'] ?? 'OK-NO-ID';
-                    $this->updateTransactionStatus($pdv['transacciones_ids'], 'COMPLETADA', $bindId);
+                    $coelsaId = $res['coelsaId'] ?? null; 
+
+                    $this->updateTransactionStatus($pdv['transacciones_ids'], 'COMPLETADA', $bindId, $coelsaId);
                     
-                    $this->logger->info("-> Transferencia OK. Bind ID: $bindId");
+                    $this->logger->info("    OK. Bind ID: $bindId | Coelsa: " . ($coelsaId ?? 'N/A'));
 
                 } catch (\Exception $e) {
                     $errores++;
-                    $this->logger->error("-> FALLO PDV {$pdv['idpdv']}: " . $e->getMessage());
+                    $this->logger->error("    FALLO PDV {$pdv['idpdv']}: " . $e->getMessage());
                     // Opcional: Marcar transacciones como ERROR_TRANSFERENCIA en BD
+                    $this->updateTransactionStatus($pdv['transacciones_ids'], 'ERROR_TRANSFERENCIA', '', '');
+
                 }
             }
             
@@ -117,7 +138,10 @@ class TransferManager
                     $errores++;
                     $this->logger->error("-> FALLO FABRICANTE: " . $e->getMessage());
                 }
+            } else {
+                $this->logger->info("Monto Fabricante es 0 o negativo. No se realiza transferencia.");
             }
+            
 
             // 7. Cierre del Lote
             $estadoFinal = ($errores === 0) ? 'COMPLETED' : (($errores < count($pdvs) + 1) ? 'PARTIAL_ERROR' : 'ERROR');
@@ -130,12 +154,188 @@ class TransferManager
                 "Estado Final: $estadoFinal. Errores: $errores. Ver log adjunto."
             );
             $this->logger->info("=== FIN LOTE (Estado: $estadoFinal) ===");
+            if ($estadoFinal !== 'COMPLETED') {
+                $this->notifier->sendFailureEmail(
+                    "Alerta Liquidación $fechaLiquidacionDDMMAA", 
+                    "El proceso finalizó con estado: $estadoFinal.\nErrores detectados: $errores.\nPor favor revise el log 'transferencias_diarias.log'.",
+                    $this->logFilePath
+                );
+            }
 
-        } catch (\Exception $e) {
+        } 
+        catch (\Exception $e) {
             $this->logger->critical("ERROR FATAL EN PROCESO: " . $e->getMessage());
             $this->closeLote($loteId, 'ERROR');
+            $this->notifier->sendFailureEmail(
+                "Error Fatal Liquidación $fechaLiquidacionDDMMAA", 
+                "El proceso crasheó: " . $e->getMessage(),
+                $this->logFilePath);
+
             throw $e;
         }
+    }
+
+    /**
+     * Obtiene montos y transacciones pendientes para una fecha dada.
+     */
+    private function getPendingTransfersData(string $fechaSQL): array
+    {
+        // 1. Consulta el monto total y los IDs de las transacciones tanto para los PDV como para Moura
+        $query = "
+            SELECT 
+                -- 1. Monto para Puntos de Venta
+                SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS monto_pdv,
+                
+                -- 2. Monto para Fabricante: (Split% Fabricante) - (Subsidio + IVA)
+                -- Nota: Asumimos que el porcentaje del fabricante es el restante (100 - porcentajepdv)
+                SUM(
+                    ROUND((((t.importeprimervenc)*(100 - splits.porcentajepdv))/100), 2) - 
+                    (COALESCE(ld.subsidiomoura, 0) + COALESCE(ld.ivasubsidiomoura, 0))
+                ) AS monto_fabricante,
+
+                GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
+
+            FROM transacciones t
+            INNER JOIN splits ON t.idpdv = splits.idpdv
+            -- Join con liquidacionesdetalle para obtener subsidios
+            LEFT JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
+            
+            WHERE splits.fecha = 
+                (
+                SELECT MAX(s2.fecha)
+                FROM splits s2
+                WHERE s2.idpdv = t.idpdv 
+                AND s2.fecha <= DATE(t.fechapagobind)
+                )
+            AND DATE(t.fechapagobind) = :fecha 
+            AND t.transferencia_procesada = 0  
+        ";
+        
+        $result = $this->dbConnection->executeQuery($query, ['fecha' => $fechaSQL]);
+        $data = $result->fetchAssociative();
+        /* el siguiente bloque comentado es porque en algun momento me dio error la invocacion como la de arriba y tuve que aclarar el tipo string
+        $stmt = $this->dbConnection->prepare($query);
+        $result = $this->dbConnection->executeQuery($query, 
+        [ 'fecha' => $fechaSQL ],
+        [ 'fecha' => Types::STRING ] // O usa 'string' si Types no está importado
+         );
+        $data = $result->fetchAssociative();
+        */
+
+        // Validar si vino vacío (nulls)
+        if (empty($data['transacciones_ids_csv'])) {
+            return [
+                'total_monto' => 0.0,
+                'monto_pdv' => 0.0,
+                'monto_fabricante' => 0.0,
+                'transacciones_ids' => []
+            ];
+        }
+
+        $montoPdv = (float) ($data['monto_pdv'] ?? 0);
+        $montoFab = (float) ($data['monto_fabricante'] ?? 0);
+        
+        // El DEBIN debe ser la suma de ambos
+
+        $transaccionIds = array_map('intval', explode(',', $data['transacciones_ids_csv']));
+
+        return [
+            'total_monto' => $montoPdv + $montoFab,
+            'monto_pdv' => $montoPdv,
+            'monto_fabricante' => $montoFab,
+            'transacciones_ids' => $transaccionIds, 
+        ];
+    }
+
+      /**
+     * Obtiene el listado de transferencias a PDVs agrupadas por CBU/Cuenta.
+     * Llamado solo DESPUÉS de confirmar que el PULL DEBIN fue COMPLETED.
+     * @param string $fechaSQL Formato YYYY-MM-DD
+     * @return array Array de arrays, cada uno con 'idpdv', 'cbu', 'monto' y 'transacciones_ids'.
+     */
+    private function getPendingTransfersForPush(string $fechaSQL): array
+    {
+        $query = "
+            SELECT 
+                p.id AS idpdv,
+                p.cbu AS cbuDestino,
+                -- 1. Monto para Puntos de Venta
+                SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS total_monto,
+                GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
+            FROM transacciones t
+            JOIN puntosdeventa p ON t.idpdv = p.id
+            INNER JOIN splits ON t.idpdv = splits.idpdv
+            -- Join con liquidacionesdetalle para obtener subsidios
+            LEFT JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
+            
+            WHERE splits.fecha = 
+                (
+                SELECT MAX(s2.fecha)
+                FROM splits s2
+                WHERE s2.idpdv = t.idpdv 
+                AND s2.fecha <= DATE(t.fechapagobind)
+                )
+            AND DATE(t.fechapagobind) = :fecha 
+            AND t.transferencia_procesada = 0
+            GROUP BY p.id, p.cbu
+        ";
+        
+        $result = $this->dbConnection->executeQuery($query, ['fecha' => $fechaSQL]);
+        
+        $transfers = [];
+        foreach ($result->fetchAllAssociative() as $row) {
+            $transfers[] = [
+                'idpdv' => (int) $row['idpdv'],
+                'cbu' => $row['cbuDestino'],
+                'monto' => (float) $row['total_monto'],
+                'transacciones_ids' => array_map('intval', explode(',', $row['transacciones_ids_csv']))
+            ];
+        }
+        
+        return $transfers;
+    }
+    
+    
+
+### 2. `TransferManager` para el Monitoreo (Llamado desde el Job CLI)
+
+### Ahora preparamos el método que el *Job* CLI usará para obtener qué DEBINs debe monitorear.
+
+    
+    
+    /**
+     * Actualiza las transacciones con los datos de la transferencia BIND.
+     * Se llama después de cada transferencia PUSH individual a un PDV.
+     */
+    private function updateTransactionStatus(array $transaccionIds, string $estado, string $bindId, ?string $coelsaId = null): void
+    {
+        if (empty($transaccionIds)) {
+            return;
+        }
+
+        // Convertir el array de IDs a una lista separada por comas para la clausula IN
+        $idsList = implode(', ', $transaccionIds);
+        
+        // El estado 'COMPLETADA' (o el que uses para éxito) marca la transacción como finalizada
+        $procesada = ($estado === 'COMPLETADA') ? 1 : 0; 
+        
+        $sql = "
+            UPDATE transacciones 
+            SET 
+                transferencia_procesada = :procesada, 
+                transferencia_estado = :estado, 
+                transferencia_id_bind = :bind_id, 
+                coelsa_id = :coelsa_id, 
+                fecha_transferencia = NOW()
+            WHERE nrotransaccion IN ({$idsList})
+        ";
+
+        $this->dbConnection->executeStatement($sql, [
+            'procesada' => $procesada,
+            'estado' => $estado,
+            'bind_id' => $bindId,
+            'coelsa_id' => $coelsaId,
+        ]);
     }
 
 
@@ -303,155 +503,5 @@ class TransferManager
         );
     }
     */
-    /**
-     * Obtiene el listado de transferencias a PDVs agrupadas por CBU/Cuenta.
-     * Llamado solo DESPUÉS de confirmar que el PULL DEBIN fue COMPLETED.
-     * @param string $fechaSQL Formato YYYY-MM-DD
-     * @return array Array de arrays, cada uno con 'idpdv', 'cbu', 'monto' y 'transacciones_ids'.
-     */
-    private function getPendingTransfersForPush(string $fechaSQL): array
-    {
-        $query = "
-            SELECT 
-                p.id AS idpdv, 
-                p.cbu AS cbuDestino, 
-                 SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS total_monto, 
-                GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
-            FROM transacciones t
-            JOIN puntosdeventa p ON t.idpdv = p.id
-            INNER JOIN splits ON t.idpdv = splits.idpdv
-            -- Filtramos por fecha y por transacciones que fueron parte del PULL exitoso (no procesadas)
-            WHERE DATE(t.fechapagobind) = :fecha AND t.transferencia_procesada = 0 AND t.completada = 0 
-            GROUP BY p.id, p.cbu
-            HAVING p.cbu IS NOT NULL AND p.cbu != ''
-        ";
-        
-        $result = $this->dbConnection->executeQuery($query, ['fecha' => $fechaSQL]);
-        
-        $transfers = [];
-        foreach ($result->fetchAllAssociative() as $row) {
-            $transfers[] = [
-                'idpdv' => (int) $row['idpdv'],
-                'cbu' => $row['cbuDestino'],
-                'monto' => (float) $row['total_monto'],
-                'transacciones_ids' => array_map('intval', explode(',', $row['transacciones_ids_csv']))
-            ];
-        }
-        
-        return $transfers;
-    }
-    
-    /**
-     * Obtiene montos y transacciones pendientes para una fecha dada.
-     */
-    private function getPendingTransfersData(string $fechaSQL): array
-    {
-        // 1. Consulta el monto total y los IDs de las transacciones tanto para los PDV como para Moura
-        $query = "
-            SELECT 
-                -- 1. Monto para Puntos de Venta
-                SUM(ROUND((((t.importeprimervenc)*(splits.porcentajepdv))/100), 2)) AS monto_pdv,
-                
-                -- 2. Monto para Fabricante: (Split% Fabricante) - (Subsidio + IVA)
-                -- Nota: Asumimos que el porcentaje del fabricante es el restante (100 - porcentajepdv)
-                SUM(
-                    ROUND((((t.importeprimervenc)*(100 - splits.porcentajepdv))/100), 2) - 
-                    (COALESCE(ld.subsidiomoura, 0) + COALESCE(ld.ivasubsidiomoura, 0))
-                ) AS monto_fabricante,
-
-                GROUP_CONCAT(t.nrotransaccion) AS transacciones_ids_csv
-
-            FROM transacciones t
-            INNER JOIN splits ON t.idpdv = splits.idpdv
-            -- Join con liquidacionesdetalle para obtener subsidios
-            LEFT JOIN liquidacionesdetalle ld ON t.nrotransaccion = ld.nrotransaccion
-            
-            WHERE splits.fecha = 
-                (
-                SELECT MAX(s2.fecha)
-                FROM splits s2
-                WHERE s2.idpdv = t.idpdv 
-                AND s2.fecha <= DATE(t.fechapagobind)
-                )
-            AND DATE(t.fechapagobind) = :fecha 
-            AND t.transferencia_procesada = 0  
-        ";
-        
-        $result = $this->dbConnection->executeQuery($query, ['fecha' => $fechaSQL]);
-        $data = $result->fetchAssociative();
-        /* el siguiente bloque comentado es porque en algun momento me dio error la invocacion como la de arriba y tuve que aclarar el tipo string
-        $stmt = $this->dbConnection->prepare($query);
-        $result = $this->dbConnection->executeQuery($query, 
-        [ 'fecha' => $fechaSQL ],
-        [ 'fecha' => Types::STRING ] // O usa 'string' si Types no está importado
-         );
-        $data = $result->fetchAssociative();
-        */
-
-        // Validar si vino vacío (nulls)
-        if (empty($data['transacciones_ids_csv'])) {
-            return [
-                'total_monto' => 0.0,
-                'monto_pdv' => 0.0,
-                'monto_fabricante' => 0.0,
-                'transacciones_ids' => []
-            ];
-        }
-
-        $montoPdv = (float) ($data['monto_pdv'] ?? 0);
-        $montoFab = (float) ($data['monto_fabricante'] ?? 0);
-        
-        // El DEBIN debe ser la suma de ambos
-        $totalDebin = $montoPdv + $montoFab;
-
-        $transaccionIds = array_map('intval', explode(',', $data['transacciones_ids_csv']));
-
-        return [
-            'total_monto' => $totalDebin,
-            'monto_pdv' => $montoPdv,
-            'monto_fabricante' => $montoFab,
-            'transacciones_ids' => $transaccionIds, 
-        ];
-    }
-
-### 2. `TransferManager` para el Monitoreo (Llamado desde el Job CLI)
-
-### Ahora preparamos el método que el *Job* CLI usará para obtener qué DEBINs debe monitorear.
-
-    
-    
-    /**
-     * Actualiza las transacciones con los datos de la transferencia BIND.
-     * Se llama después de cada transferencia PUSH individual a un PDV.
-     */
-    private function updateTransactionStatus(array $transaccionIds, string $estado, string $bindId, ?string $coelsaId = null): void
-    {
-        if (empty($transaccionIds)) {
-            return;
-        }
-
-        // Convertir el array de IDs a una lista separada por comas para la clausula IN
-        $idsList = implode(', ', $transaccionIds);
-        
-        // El estado 'COMPLETADA' (o el que uses para éxito) marca la transacción como finalizada
-        $procesada = ($estado === 'COMPLETADA') ? 1 : 0; 
-        
-        $sql = "
-            UPDATE transacciones 
-            SET 
-                transferencia_procesada = :procesada, 
-                transferencia_estado = :estado, 
-                transferencia_id_bind = :bind_id, 
-                coelsa_id = :coelsa_id, 
-                fecha_transferencia = NOW()
-            WHERE nrotransaccion IN ({$idsList})
-        ";
-
-        $this->dbConnection->executeStatement($sql, [
-            'procesada' => $procesada,
-            'estado' => $estado,
-            'bind_id' => $bindId,
-            'coelsa_id' => $coelsaId,
-        ]);
-    }
+  
 }

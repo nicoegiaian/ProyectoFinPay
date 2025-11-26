@@ -47,7 +47,7 @@ services:
             $BIND_API_URL: '%env(BIND_API_URL)%'
             $BIND_DEBIN_SUBSCRIPTION_ID: '%env(BIND_DEBIN_SUBSCRIPTION_ID)%'
             $BIND_CUENTA_ID: '%env(BIND_CUENTA_ID)%' 
-            $BIND_CBU_ORIGEN: '%env(BIND_CBU_ORIGEN)%'
+            $BIND_CVU_ORIGEN: '%env(BIND_CBU_ORIGEN)%'
             $BIND_TOKEN_URL: '%env(BIND_TOKEN_URL)%'
             $BIND_SCOPE: '%env(BIND_SCOPE)%' 
 

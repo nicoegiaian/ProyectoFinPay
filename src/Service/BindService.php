@@ -15,11 +15,12 @@ class BindService implements BindServiceInterface
     private HttpClientInterface $httpClient;
     private const DEBIN_PULL_ENDPOINT = '/walletentidad-operaciones/v1/api/v1.201/DebinRecurrenteCredito';
     private const DEBIN_STATUS_ENDPOINT = '/walletentidad-cuenta/v1/api/v1.201/Organizacion/GetDebinPedidoById/';
+    private const TRANSFER_ENDPOINT = '/walletentidad-operaciones/v1/api/v1.201/transferir';
     private string $tokenUrl;
     private string $scope;
     private ?string $accessToken = null;
     private string $cuentaId;   
-    private string $cbuOrigen;  
+    private string $cvuOrigen;  
 
     // Symfony inyecta el HttpClient y las credenciales del .env
     public function __construct(
@@ -28,8 +29,7 @@ class BindService implements BindServiceInterface
         string $BIND_CLIENT_SECRET, 
         string $BIND_API_URL,
         string $BIND_CUENTA_ID,
-        string $BIND_CBU_ORIGEN,
-        string $BIND_DEBIN_SUBSCRIPTION_ID,
+        string $BIND_CVU_ORIGEN,
         string $BIND_TOKEN_URL,
         string $BIND_SCOPE
     ) {
@@ -38,8 +38,7 @@ class BindService implements BindServiceInterface
         $this->clientSecret = $BIND_CLIENT_SECRET;
         $this->apiUrl = $BIND_API_URL;
         $this->cuentaId = $BIND_CUENTA_ID;     // <--- Asignación
-        $this->cbuOrigen = $BIND_CBU_ORIGEN;
-        $this->debinSubscriptionId = $BIND_DEBIN_SUBSCRIPTION_ID;       
+        $this->cvuOrigen = $BIND_CVU_ORIGEN;
         $this->tokenUrl = $BIND_TOKEN_URL;
         $this->scope = $BIND_SCOPE;
     }
@@ -191,22 +190,33 @@ class BindService implements BindServiceInterface
     {
         $token = $this->getAccessToken(); // Obtener token
         
+        $referencia = 'TRF-' . time() . '-' . rand(1000, 9999);
+
         // Formato requerido por la API: https://psp.bind.com.ar/developers/apis/realizar-una-transferencia
         $payload = [
-            'destino' => ['cbu' => $cbuDestino],
-            'monto' => $monto,
+            'cvuOrigen' => $this->cvuOrigen,
+            'cbu_cvu_destino' => $cbuDestino,
+            'importe' => $monto,
+            'referencia' => $referencia,
+            'concepto' => 'VAR',
             // ... otros campos requeridos (concepto, referencia, etc.)
         ];
 
-        $response = $this->httpClient->request('POST', $this->apiUrl . '/transferencias/v1', [
-            'headers' => ['Authorization' => 'Bearer ' . $token],
+        $url = $this->apiUrl . self::TRANSFER_ENDPOINT;
+
+        $response = $this->httpClient->request('POST', $url, [
+            'headers' => [
+                'Authorization' => 'Bearer ' . $token,
+                'Content-Type' => 'application/json'
+            ],
             'json' => $payload
         ]);
 
         $data = $response->toArray();
         // Lógica de manejo de errores de BIND
         if ($response->getStatusCode() !== 201 && $response->getStatusCode() !== 200) {
-            throw new \Exception("BIND API Error (Status {$response->getStatusCode()}): " . json_encode($data));
+            $errorDetalle = $data['mensaje'] ?? json_encode($data['errores'] ?? $data);
+            throw new \RuntimeException("BIND Transferencia Falló (HTTP $statusCode): " . $errorDetalle);
         }
 
         return $data;
