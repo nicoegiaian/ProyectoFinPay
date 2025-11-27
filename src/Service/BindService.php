@@ -106,7 +106,7 @@ class BindService implements BindServiceInterface
         // Payload específico para el DebinRecurrenteCredito
         $payload = [
             'cuentaId' => (int) $this->cuentaId, // Integer REQUIRED
-            'cbuOrigen' => $this->cbuOrigen,     // String REQUIRED
+            'cbuOrigen' => $this->cvuOrigen,     // String REQUIRED
             'importe' => $monto,                 // Double OPTIONAL (pero necesario para nosotros)
             'referencia' => $referencia,         // String OPTIONAL
             'idExterno' => $referencia,          // String OPTIONAL (Usamos la referencia para garantizar unicidad)
@@ -194,7 +194,7 @@ class BindService implements BindServiceInterface
 
         // Formato requerido por la API: https://psp.bind.com.ar/developers/apis/realizar-una-transferencia
         $payload = [
-            'cvuOrigen' => $this->cvuOrigen,
+            'cvu_Origen' => $this->cvuOrigen,
             'cbu_cvu_destino' => $cbuDestino,
             'importe' => $monto,
             'referencia' => $referencia,
@@ -212,9 +212,11 @@ class BindService implements BindServiceInterface
             'json' => $payload
         ]);
 
-        $data = $response->toArray();
+        $statusCode = $response->getStatusCode();
+        $data = $response->toArray(false);
+        
         // Lógica de manejo de errores de BIND
-        if ($response->getStatusCode() !== 201 && $response->getStatusCode() !== 200) {
+        if ($statusCode !== 201 && $statusCode !== 200) {
             $errorDetalle = $data['mensaje'] ?? json_encode($data['errores'] ?? $data);
             throw new \RuntimeException("BIND Transferencia Falló (HTTP $statusCode): " . $errorDetalle);
         }

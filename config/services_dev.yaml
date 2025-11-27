@@ -11,6 +11,5 @@ services:
             $scenario: '%bind.scenario.current%'
             
     # 2. Sobrescribimos el BindService real
-    App\Service\BindService: '@App\Service\MockBindService'
-
-    App\Service\BindServiceInterface: '@App\Service\MockBindService'
+    #App\Service\BindService: '@App\Service\MockBindService'
+    #App\Service\BindServiceInterface: '@App\Service\MockBindService'

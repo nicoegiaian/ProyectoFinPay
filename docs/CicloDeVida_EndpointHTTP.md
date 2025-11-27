@@ -1,33 +1,57 @@
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Client as Cliente API
-    participant Firewall as JwtTokenSubscriber
-    participant Controller as TransferController
-    participant Manager as TransferManager
+    actor User as Usuario (Front/Postman)
+    participant Ctrl as TransferController
+    participant Mgr as TransferManager
+    participant DB as Base de Datos
+    participant API as API BIND
+    participant Email as Notifier
 
-    Note over Client, Firewall: POST /transfers/execute
+    Note over User, API: Precondición: Fondos disponibles en cuenta BIND
 
-    Client->>Firewall: Header: Authorization Bearer {TOKEN}
+    User->>Ctrl: POST /transfers/execute {fecha}
     
-    alt Token Inválido / Ausente
-        Firewall-->>Client: 401 Unauthorized / 403 Forbidden
-    else Token Válido
-        Firewall->>Controller: Pasa Petición
+    rect rgb(240, 248, 255)
+    note right of User: Validación JWT (Middleware)
+    end
+
+    Ctrl->>Mgr: executeTransferProcess(fecha)
+    
+    Mgr->>DB: Check si existe Lote (PROCESSING/COMPLETED)
+    
+    alt Lote Ya Existe
+        Mgr-->>Ctrl: Exception (Bloqueo)
+        Ctrl-->>User: 400/500 Error: "Ya procesado"
+    end
+
+    Mgr->>DB: INSERT lotes_liquidacion (Estado: PROCESSING)
+    Mgr->>DB: getPendingTransfersData (Calcula Totales)
+    
+    alt Sin montos pendientes
+        Mgr->>DB: UPDATE Lote (COMPLETED)
+        Mgr-->>Ctrl: Fin Proceso
+        Ctrl-->>User: 200 OK "Sin movimientos"
+    else Hay deuda
+        Mgr->>DB: UPDATE Lote (Guarda Montos Totales)
         
-        alt Body JSON Inválido o sin Fecha
-            Controller-->>Client: 400 Bad Request
-            Note right of Controller: {"status": "error", "message": "..."}
-        else Body Correcto
-            Controller->>Manager: executeDebinPull(fecha)
-            
-            alt Bloqueo: Ya existe DEBIN
-                Manager-->>Controller: Error Array
-                Controller-->>Client: 500 Internal Server Error
-            else Éxito: DEBIN Iniciado
-                Manager-->>Controller: Success Array
-                Controller-->>Client: 200 OK
-                Note right of Controller: {"status": "success", "debin_id": "..."}
-            end
+        loop Por cada PDV (Punto de Venta)
+            Mgr->>API: POST /transferir (CVU Wallet -> CBU PDV)
+            API-->>Mgr: OK {comprobanteId, coelsaId}
+            Mgr->>DB: UPDATE transacciones (Pagada, IDs)
         end
+
+        opt Si monto_fabricante > 0
+            Mgr->>API: POST /transferir (CVU Wallet -> CBU Moura)
+            API-->>Mgr: OK
+        end
+
+        Mgr->>DB: UPDATE lotes_liquidacion (Estado Final: COMPLETED/PARTIAL)
+        
+        opt Si hubo errores
+            Mgr->>Email: Enviar reporte de fallos
+        end
+
+        Mgr-->>Ctrl: Retorno void
+        Ctrl-->>User: 200 OK "Proceso Iniciado/Finalizado"
     end

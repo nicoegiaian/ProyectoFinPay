@@ -38,18 +38,22 @@ services:
             $MAIL_ENCRYPTION: '%env(MAIL_ENCRYPTION)%'
             $MAIL_DESTINATION: '%env(MAIL_DESTINATION)%'
  
+    
     App\Service\BindService:
         arguments:
             # Autowiring se encarga de HttpClientInterface. 
             # Mapeamos explícitamente los strings:
+            $httpClient: '@Symfony\Contracts\HttpClient\HttpClientInterface'
             $BIND_CLIENT_ID: '%env(BIND_CLIENT_ID)%'
             $BIND_CLIENT_SECRET: '%env(BIND_CLIENT_SECRET)%'
             $BIND_API_URL: '%env(BIND_API_URL)%'
-            $BIND_DEBIN_SUBSCRIPTION_ID: '%env(BIND_DEBIN_SUBSCRIPTION_ID)%'
             $BIND_CUENTA_ID: '%env(BIND_CUENTA_ID)%' 
-            $BIND_CVU_ORIGEN: '%env(BIND_CBU_ORIGEN)%'
+            $BIND_CVU_ORIGEN: '%env(BIND_CVU_ORIGEN)%'
             $BIND_TOKEN_URL: '%env(BIND_TOKEN_URL)%'
             $BIND_SCOPE: '%env(BIND_SCOPE)%' 
+
+    App\Service\BindServiceInterface: '@App\Service\BindService'
+
 
     App\Service\TransferManager:
         arguments:

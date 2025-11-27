@@ -4,37 +4,31 @@ classDiagram
         +executeTransfer(Request, TransferManager)
     }
 
-    class JwtTokenSubscriber {
-        +onRequestEvent(RequestEvent)
-        -validateToken()
-    }
-
     class TransferManager {
-        +executeDebinPull(fecha)
-        +getPendingDebins()
-        -checkExistingDebin()
+        -logFilePath: string
+        +executeTransferProcess(fecha)
+        -getPendingTransfersData()
+        -getPendingTransfersForPush()
+        -updateTransactionStatus()
     }
 
     class BindServiceInterface {
         <<Interface>>
-        +initiateDebinPull()
-        +transferToThirdParty()
+        +transferToThirdParty(cbu, monto)
     }
 
     class BindService {
-        -httpClient
-        -credentials
-        +initiateDebinPull()
-        +getDebinStatusById()
+        -cvuOrigenWallet: string
+        +transferToThirdParty()
+        -getAccessToken()
     }
 
     class Notifier {
-        +sendFailureEmail()
+        +sendFailureEmail(subject, body, attachment)
     }
 
-    %% Relaciones
-    TransferController ..> TransferManager : Usa
-    JwtTokenSubscriber --|> TransferController : Intercepta Request
-    TransferManager ..> BindServiceInterface : Inyecta
-    TransferManager ..> Notifier : Inyecta
-    BindService --|> BindServiceInterface : Implementa
+    TransferController --> TransferManager : Usa
+    TransferManager --> BindServiceInterface : Inyecta
+    TransferManager --> Notifier : Inyecta
+    TransferManager ..> Monolog : Escribe Log
+    BindService ..|> BindServiceInterface : Implementa
