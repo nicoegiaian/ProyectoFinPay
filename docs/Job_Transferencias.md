@@ -1,36 +1,52 @@
 ```mermaid
 flowchart TD
-    Start(Inicio Job Monitor) --> GetPend[Obtener DEBINs Pendientes]
-    GetPend -->|TransferManager::getPendingDebins| DB[(Base de Datos)]
-    DB --> List{¿Hay DEBINs?}
+    Start(Inicio: executeTransferProcess) --> CleanLog[Limpiar Log]
+    CleanLog --> CheckLote{¿Lote Previo?}
     
-    List -- No --> End(Fin del Proceso)
-    List -- Si --> Loop[Iterar por cada DEBIN]
+    CheckLote -- Si (Processing/Completed) --> ErrorBloqueo[Lanzar Excepción]
+    CheckLote -- No --> InsertLote[INSERT Lote PROCESSING]
     
-    Loop --> CallBind[Consultar Estado en BIND]
-    CallBind -->|BindService::getDebinStatusById| API_BIND((API BIND))
+    InsertLote --> Calc[Calcular Montos PDV y Fab]
+    Calc --> CheckMonto{¿Total > 0?}
     
-    API_BIND --> CheckState{Evaluar Estado}
+    CheckMonto -- No --> CloseZero[Cerrar Lote COMPLETED]
+    CloseZero --> End
     
-    CheckState -- PENDING / IN_PROGRESS --> LogWait[Log: Esperando...]
-    LogWait --> Loop
+    CheckMonto -- Si --> UpdateLote[UPDATE Lote con Montos]
+    UpdateLote --> GetPDVs[Obtener Lista CBUs PDV]
     
-    CheckState -- REJECTED / UNKNOWN --> MarkFail[Marcar como FALLIDO en BD]
-    MarkFail --> Alert[Notifier::sendFailureEmail]
-    Alert --> Loop
+    GetPDVs --> ValidarDatos{¿Hay Monto pero lista vacía?}
+    ValidarDatos -- Si (Error Datos) --> MarkErrorDatos[Cerrar Lote ERROR]
+    MarkErrorDatos --> AlertMail[Mail Alerta Crítica]
+    AlertMail --> End
     
-    CheckState -- COMPLETED --> PUSH_PROCESS[Iniciar Proceso PUSH]
+    ValidarDatos -- No --> LoopPDV[Bucle Transferencias PDV]
     
-    subgraph Etapa de Dispersión
-    PUSH_PROCESS --> GetPDVs[Obtener Comercios y Montos]
-    GetPDVs --> LoopPUSH[Iterar por Comercio]
-    LoopPUSH --> Transfer[Transferir a CBU Comercio]
-    Transfer -->|BindService::transferToThirdParty| API_BIND
-    Transfer --> UpdateTrx[Actualizar Transacciones en BD]
-    UpdateTrx -->|Marca procesada=1| DB
-    LoopPUSH --> EndPUSH
-    end
+    LoopPDV --> TryPDV{Transferir}
+    TryPDV -- Éxito --> MarkTrx[Update Transacción OK]
+    TryPDV -- Fallo --> LogErr[Log Error & Count++]
     
-    EndPUSH --> MarkDebinOK[Marcar DEBIN como FINALIZADO]
-    MarkDebinOK --> Loop
-
+    MarkTrx --> LoopPDV
+    LogErr --> LoopPDV
+    
+    LoopPDV --> Fab{¿Monto Fab > 0?}
+    Fab -- Si --> TryFab[Transferir a Moura]
+    Fab -- No --> EvalState
+    
+    TryFab -- Éxito --> LogFabOK[Log OK]
+    TryFab -- Fallo --> LogFabErr[Log Error & Count++]
+    
+    LogFabOK --> EvalState
+    LogFabErr --> EvalState
+    
+    EvalState{Evaluar Errores}
+    EvalState -- 0 Errores --> StateC[COMPLETED]
+    EvalState -- Algunos Errores --> StateP[PARTIAL_ERROR]
+    EvalState -- Todo Falló --> StateE[ERROR]
+    
+    StateC & StateP & StateE --> CloseLote[UPDATE Lote Estado Final]
+    CloseLote --> CheckMail{¿Estado != COMPLETED?}
+    
+    CheckMail -- Si --> SendMail[Enviar Mail con Log Adjunto]
+    CheckMail -- No --> End
+    SendMail --> End(Fin)

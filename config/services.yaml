@@ -51,6 +51,7 @@ services:
             $BIND_CVU_ORIGEN: '%env(BIND_CVU_ORIGEN)%'
             $BIND_TOKEN_URL: '%env(BIND_TOKEN_URL)%'
             $BIND_SCOPE: '%env(BIND_SCOPE)%' 
+            $BIND_ENABLE_REAL_TRANSFER: '%env(bool:BIND_ENABLE_REAL_TRANSFER)%' 
 
     App\Service\BindServiceInterface: '@App\Service\BindService'
 
@@ -59,3 +60,4 @@ services:
         arguments:
             $finpaySettlementLogger: '@monolog.logger.finpay_settlement'
             $logFilePath: '%kernel.logs_dir%/transferencias_diarias.log'
+            $BIND_ENABLE_REAL_TRANSFER: '%env(bool:BIND_ENABLE_REAL_TRANSFER)%'

@@ -16,14 +16,19 @@ class TransferManager
     private Connection $dbConnection; 
     private LoggerInterface $logger;
     private string $logFilePath; 
+    private bool $enableRealTransfer;
 
-    public function __construct(BindServiceInterface $bindService, Notifier $notifier, Connection $defaultConnection, LoggerInterface $finpaySettlementLogger,string $logFilePath)
+
+    public function __construct(BindServiceInterface $bindService, Notifier $notifier, Connection $defaultConnection, LoggerInterface $finpaySettlementLogger,string $logFilePath, bool $BIND_ENABLE_REAL_TRANSFER)
     {
         $this->bindService = $bindService;
         $this->notifier = $notifier;
         $this->dbConnection = $defaultConnection; 
         $this->logger = $finpaySettlementLogger;
         $this->logFilePath = $logFilePath;
+        $this->enableRealTransfer = $BIND_ENABLE_REAL_TRANSFER;
+
+
     }
 
 
@@ -32,6 +37,7 @@ class TransferManager
      */
     public function executeTransferProcess(string $fechaLiquidacionDDMMAA): void
     {
+        $estadoExito = $this->enableRealTransfer ? 'COMPLETED' : 'AUDIT_COMPLETED';
         // 0. LIMPIEZA DE LOG (Overwriting)
         // Vaciamos el archivo antes de empezar. Si no existe, no pasa nada.
         if (file_exists($this->logFilePath)) {
@@ -117,6 +123,26 @@ class TransferManager
                     
                     $this->logger->info("    OK. Bind ID: $bindId | Coelsa: " . ($coelsaId ?? 'N/A'));
 
+                } catch (\App\Exception\DryRunException $e) {
+                    // CASO DRY RUN (Simulacro)
+                    $separador = str_repeat('-', 50);
+                    $mensajeLegible = "\n" . $separador . "\n" .
+                                      " [DRY RUN] SIMULACIÓN PDV ID {$pdv['idpdv']}\n" . 
+                                      $separador . "\n" . 
+                                      $e->getMessage() . "\n" . // Aquí viene el JSON formateado
+                                      $separador . "\n";
+                    file_put_contents($this->logFilePath, $mensajeLegible, FILE_APPEND);                  
+                    
+                    // Marcamos con estado AUDIT_COMPLETED y procesada = false (0)
+                    // Nota: Necesitas adaptar updateTransactionStatus para recibir el flag 'procesada'
+                    $this->updateTransactionStatus(
+                        $pdv['transacciones_ids'], 
+                        'AUDIT_COMPLETED', 
+                        'MOCK-ID-' . time(), 
+                        null, 
+                        false // <--- NO MARCAR COMO PROCESADA
+                    );
+
                 } catch (\Exception $e) {
                     $errores++;
                     $this->logger->error("    FALLO PDV {$pdv['idpdv']}: " . $e->getMessage());
@@ -134,6 +160,18 @@ class TransferManager
                     
                     $resFab = $this->bindService->transferToThirdParty($cbuFab, $data['monto_fabricante']);
                     $this->logger->info("-> Transferencia Fabricante OK.");
+                
+                } catch (\App\Exception\DryRunException $e) {
+                    // CASO DRY RUN (Simulacro)
+                    $separador = str_repeat('-', 50);
+                    $mensajeLegible = "\n" . $separador . "\n" .
+                                    " [DRY RUN] SIMULACIÓN FABRICANTE\n" . 
+                                    $separador . "\n" . 
+                                    $e->getMessage() . "\n" . 
+                                    $separador . "\n";
+
+                    file_put_contents($this->logFilePath, $mensajeLegible, FILE_APPEND);
+
                 } catch (\Exception $e) {
                     $errores++;
                     $this->logger->error("-> FALLO FABRICANTE: " . $e->getMessage());
@@ -144,15 +182,11 @@ class TransferManager
             
 
             // 7. Cierre del Lote
-            $estadoFinal = ($errores === 0) ? 'COMPLETED' : (($errores < count($pdvs) + 1) ? 'PARTIAL_ERROR' : 'ERROR');
+            $estadoFinal = ($errores === 0) ? $estadoExito : (($errores < count($pdvs) + 1) ? 'PARTIAL_ERROR' : 'ERROR');
             
             $this->closeLote($loteId, $estadoFinal);
             
-            // 8. Notificación
-            $this->notifier->sendFailureEmail(
-                "Resumen Liquidación $fechaLiquidacionDDMMAA", 
-                "Estado Final: $estadoFinal. Errores: $errores. Ver log adjunto."
-            );
+            
             $this->logger->info("=== FIN LOTE (Estado: $estadoFinal) ===");
             if ($estadoFinal !== 'COMPLETED') {
                 $this->notifier->sendFailureEmail(
@@ -307,11 +341,13 @@ class TransferManager
      * Actualiza las transacciones con los datos de la transferencia BIND.
      * Se llama después de cada transferencia PUSH individual a un PDV.
      */
-    private function updateTransactionStatus(array $transaccionIds, string $estado, string $bindId, ?string $coelsaId = null): void
+    private function updateTransactionStatus(array $transaccionIds, string $estado, string $bindId, ?string $coelsaId = null, bool $marcarProcesada = true): void
     {
         if (empty($transaccionIds)) {
             return;
         }
+
+        $procesadaInt = $marcarProcesada ? 1 : 0; // 1 si es real, 0 si es Audit
 
         // Convertir el array de IDs a una lista separada por comas para la clausula IN
         $idsList = implode(', ', $transaccionIds);
@@ -319,24 +355,49 @@ class TransferManager
         // El estado 'COMPLETADA' (o el que uses para éxito) marca la transacción como finalizada
         $procesada = ($estado === 'COMPLETADA') ? 1 : 0; 
         
-        $sql = "
-            UPDATE transacciones 
-            SET 
-                transferencia_procesada = :procesada, 
-                transferencia_estado = :estado, 
-                transferencia_id_bind = :bind_id, 
-                coelsa_id = :coelsa_id, 
-                fecha_transferencia = NOW()
-            WHERE nrotransaccion IN ({$idsList})
-        ";
+        If ( $procesadaInt == 0)
+        {
+            $sql = "
+                UPDATE transacciones 
+                SET 
+                    transferencia_procesada = :procesada, 
+                    transferencia_estado = :estado, 
+                    transferencia_id_bind = :bind_id, 
+                    coelsa_id = :coelsa_id, 
+                    fecha_transferencia = NOW()
+                WHERE nrotransaccion IN ({$idsList})
+            ";
 
-        $this->dbConnection->executeStatement($sql, [
-            'procesada' => $procesada,
-            'estado' => $estado,
-            'bind_id' => $bindId,
-            'coelsa_id' => $coelsaId,
-        ]);
+            $this->dbConnection->executeStatement($sql, [
+                'procesada' =>  $procesadaInt,
+                'estado' => $estado,
+                'bind_id' => $bindId,
+                'coelsa_id' => $coelsaId,
+            ]);
+        }
+        else
+            {
+                $sql = "
+                UPDATE transacciones 
+                SET 
+                    transferencia_procesada = :procesada, 
+                    transferencia_estado = :estado, 
+                    transferencia_id_bind = :bind_id, 
+                    coelsa_id = :coelsa_id, 
+                    fecha_transferencia = NOW()
+                WHERE nrotransaccion IN ({$idsList})
+            ";
+
+            $this->dbConnection->executeStatement($sql, [
+                'procesada' => $procesada,
+                'estado' => $estado,
+                'bind_id' => $bindId,
+                'coelsa_id' => $coelsaId,
+            ]);
+            }
     }
+
+    
 
 
     private function checkExistingLote(string $fechaSQL): bool

@@ -22,3 +22,13 @@ Transferencia a Moura
     Importe Neto con la aplicacion del split para Moura 
     - (Subsidio + IVA)
 
+    donde:
+    Subsidio= ImporteBruto * %ID_SUBSIDIO_MOURA
+
+ImporteBruto (transacciones.importe)
+
+transacciones.importe = datosmoura.importe
+    datosmoura.importe = importe NETO 
+transacciones.importecheque = datosmoura.importechequebruto
+    datosmoura.importechequebruto = importe BRUTO
+

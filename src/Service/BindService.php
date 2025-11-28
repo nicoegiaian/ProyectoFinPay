@@ -21,6 +21,7 @@ class BindService implements BindServiceInterface
     private ?string $accessToken = null;
     private string $cuentaId;   
     private string $cvuOrigen;  
+    private bool $enableRealTransfer;
 
     // Symfony inyecta el HttpClient y las credenciales del .env
     public function __construct(
@@ -31,7 +32,8 @@ class BindService implements BindServiceInterface
         string $BIND_CUENTA_ID,
         string $BIND_CVU_ORIGEN,
         string $BIND_TOKEN_URL,
-        string $BIND_SCOPE
+        string $BIND_SCOPE,
+        bool $BIND_ENABLE_REAL_TRANSFER
     ) {
         $this->httpClient = $httpClient;
         $this->clientId = $BIND_CLIENT_ID;
@@ -41,6 +43,7 @@ class BindService implements BindServiceInterface
         $this->cvuOrigen = $BIND_CVU_ORIGEN;
         $this->tokenUrl = $BIND_TOKEN_URL;
         $this->scope = $BIND_SCOPE;
+        $this->enableRealTransfer = $BIND_ENABLE_REAL_TRANSFER;
     }
 
 
@@ -202,6 +205,18 @@ class BindService implements BindServiceInterface
             // ... otros campos requeridos (concepto, referencia, etc.)
         ];
 
+        if (!$this->enableRealTransfer) {
+            // Empaquetamos todo lo que íbamos a mandar y lanzamos la excepción
+            $debugData = [
+                'url' => $this->apiUrl . self::TRANSFER_ENDPOINT,
+                'token_preview' => substr($token, 0, 10) . '...',
+                'payload' => $payload
+            ];
+            
+            // Lanzamos la excepción para que TransferManager la atrape
+            throw new \App\Exception\DryRunException(json_encode($debugData, JSON_PRETTY_PRINT));
+        }
+        
         $url = $this->apiUrl . self::TRANSFER_ENDPOINT;
 
         $response = $this->httpClient->request('POST', $url, [
