@@ -92,8 +92,13 @@ class OrquestadorTrxCommand extends Command
             return Command::FAILURE;
         }
         
+        // --- LLAMADA 3: calcular_nuevos_campos.php (Usa fecha del día anterior, se ejecuta todos los días) ---
+        if (!$this->runScript('calcular_nuevos_campos.php', $fechaProcesoDDMMAA, $output, $this->legacyScriptsPath)) {
+            return Command::FAILURE;
+        }
+        
         // =========================================================
-        // 3. CONTROL DE LIQUIDACIÓN DIARIA (Requerimiento 2)
+        // 4. CONTROL DE LIQUIDACIÓN DIARIA (Requerimiento 2)
         // =========================================================
         if (!$this->dateService->esDiaHabil($fechaBaseObj)) {
             $output->writeln("<comment>AVISO: NO se ejecuta liquidaciondiaria.php. El día ({$fechaLiquidacionDDMMAA}) NO es hábil.</comment>");
