@@ -96,6 +96,11 @@ class OrquestadorTrxCommand extends Command
         if (!$this->runScript('calcular_nuevos_campos.php', $fechaProcesoDDMMAA, $output, $this->legacyScriptsPath)) {
             return Command::FAILURE;
         }
+
+        // --- LLAMADA 4: procesar_financiacion_12cuotas.php (Usa fecha del día anterior, se ejecuta todos los días) ---
+        if (!$this->runScript('procesar_financiacion_12cuotas.php', $fechaProcesoDDMMAA, $output, $this->legacyScriptsPath)) {
+            return Command::FAILURE;
+        }
         
         // =========================================================
         // 4. CONTROL DE LIQUIDACIÓN DIARIA (Requerimiento 2)
@@ -106,7 +111,7 @@ class OrquestadorTrxCommand extends Command
             return Command::SUCCESS; 
         }
         
-        // --- LLAMADA 3: liquidaciondiaria.php (Usa la fecha del día de ejecución) ---
+        // --- LLAMADA 5: liquidaciondiaria.php (Usa la fecha del día de ejecución) ---
         if (!$this->runScript('liquidaciondiaria.php', $fechaLiquidacionDDMMAA, $output, $this->legacyScriptsPath)) {
             return Command::FAILURE;
         }
