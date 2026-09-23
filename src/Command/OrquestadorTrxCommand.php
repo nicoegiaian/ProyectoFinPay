@@ -141,6 +141,7 @@ class OrquestadorTrxCommand extends Command
         $output->writeln("-> Llamando a {$scriptName} con fecha: {$fechaParam}");
         
         $process = new Process($commandLine);
+        $process->setTimeout(300);
         $process->setWorkingDirectory($basePath);
         
         // Las variables de entorno para el proceso hijo (legacy) se mantienen
